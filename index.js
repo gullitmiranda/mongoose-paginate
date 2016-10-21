@@ -19,13 +19,19 @@
 function paginate(query, options, callback) {
   query = query || {};
   options = Object.assign({}, paginate.options, options);
-  let select = options.select;
-  let sort = options.sort;
-  let populate = options.populate;
-  let lean = options.lean || false;
+
+  const {
+    sort,
+    limit = 10,
+  } = options;
+
+  let select     = options.select;
+  let populate   = options.populate;
+  let lean       = options.lean || false;
   let leanWithId = options.leanWithId ? options.leanWithId : true;
-  let limit = options.limit ? options.limit : 10;
-  let page, offset, skip, promises;
+  let page, offset, skip;
+  let docsQuery, countQuery, promises;
+
   if (options.offset) {
     offset = options.offset;
     skip = offset;
@@ -37,49 +43,72 @@ function paginate(query, options, callback) {
     offset = 0;
     skip = offset;
   }
+
   if (limit) {
-    let docsQuery = this.find(query)
-      .select(select)
-      .sort(sort)
+    if (typeof query === 'object' && query._pipeline) {
+      docsQuery  = this.aggregate(query._pipeline);
+      countQuery = this.aggregate(query._pipeline).group({ _id: null, count: { $sum: 1 } });
+    } else {
+      docsQuery  = this
+        .find(options.query)
+        .select(select)
+        .lean(lean)
+        ;
+      countQuery = this.count(options.query);
+    }
+
+    docsQuery = docsQuery
       .skip(skip)
-      .limit(limit)
-      .lean(lean);
+      .limit(limit);
+
+    if (sort) {
+      docsQuery = docsQuery.sort(sort);
+    }
+
     if (populate) {
       [].concat(populate).forEach((item) => {
         docsQuery.populate(item);
       });
     }
-    promises = {
-      docs: docsQuery.exec(),
-      count: this.count(query).exec()
-    };
+
+    promises = [
+      docsQuery.exec(),
+      countQuery.exec(),
+    ];
+  }
+
+  return Promise.all(promises).then(([ docs = [], total = 0 ]) => {
+    if (countQuery._pipeline) {
+      total = (total.length === 0) ? 0 : total[0].count;
+    }
+
     if (lean && leanWithId) {
-      promises.docs = promises.docs.then((docs) => {
-        docs.forEach((doc) => {
-          doc.id = String(doc._id);
-        });
-        return docs;
+      docs = docs.map((doc) => {
+        doc.id = String(doc._id);
+        return doc;
       });
     }
-  }
-  promises = Object.keys(promises).map((x) => promises[x]);
-  return Promise.all(promises).then((data) => {
-    let result = {
-      docs: data.docs,
-      total: data.count,
-      limit: limit
+
+    const result = {
+      docs,
+      total,
+      limit,
     };
+
     if (offset !== undefined) {
       result.offset = offset;
     }
+
     if (page !== undefined) {
       result.page = page;
-      result.pages = Math.ceil(data.count / limit) || 1;
+      result.pages = Math.ceil(total / limit) || 1;
     }
+
     if (typeof callback === 'function') {
       return callback(null, result);
     }
-    let promise = new Promise();
+
+    const promise = new Promise();
     promise.resolve(result);
     return promise;
   });
