@@ -50,11 +50,11 @@ function paginate(query, options, callback) {
       countQuery = this.aggregate(query._pipeline).group({ _id: null, count: { $sum: 1 } });
     } else {
       docsQuery  = this
-        .find(options.query)
+        .find(query)
         .select(select)
         .lean(lean)
         ;
-      countQuery = this.count(options.query);
+      countQuery = this.count(query);
     }
 
     docsQuery = docsQuery
